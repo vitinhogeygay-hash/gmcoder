@@ -1,112 +1,60 @@
-// api/check-payment.js - Nova versão com AllowPay v2
+// api/check-payment.js
 const API_BASE = "https://allow-gi0i.onrender.com";
-const API_KEY = "allow_apikey_ms1ng7i02bp";
+const API_KEY = process.env.ALLOWPAY_API_KEY;
 
 export default async function handler(req, res) {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET,POST,OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-    
-    if (req.method === 'OPTIONS') {
-        return res.status(200).end();
+  res.setHeader("Cache-Control", "no-store");
+  if (req.method === "OPTIONS") {
+    res.setHeader("Allow", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
+    res.setHeader("Access-Control-Allow-Headers", "Content-Type");
+    return res.status(204).end();
+  }
+  if (!['GET', 'POST'].includes(req.method)) {
+    res.setHeader("Allow", "GET, POST, OPTIONS");
+    return res.status(405).json({ success: false, error: "Método não permitido." });
+  }
+  if (!API_KEY) {
+    console.error("ALLOWPAY_API_KEY não configurada no ambiente.");
+    return res.status(500).json({ success: false, error: "Serviço temporariamente indisponível." });
+  }
+  try {
+    const input = req.method === 'POST' ? (req.body || {}) : (req.query || {});
+    const transactionId = String(input.transaction_id || '').trim();
+    const route = String(input.route || 'safepix').trim();
+    if (!transactionId || transactionId.length > 150 || !/^[a-zA-Z0-9_-]+$/.test(transactionId)) {
+      return res.status(400).json({ success: false, error: 'Identificador de transação inválido.' });
     }
-    
-    try {
-        const input = req.method === 'POST' ? req.body : req.query;
-        const transactionId = input.transaction_id || '';
-        const route = input.route || '';
-        
-        if (!transactionId) {
-            return res.status(400).json({
-                success: false,
-                error: 'Transaction ID não fornecido'
-            });
-        }
-        
-        // Buscar o route salvo (se não veio na requisição)
-        let routeToUse = route;
-        if (!routeToUse) {
-            // Tenta buscar do localStorage via header (opcional)
-            // Ou usa safepix como padrão
-            routeToUse = 'safepix';
-        }
-        
-        // CONSULTAR STATUS NA ALLOWPAY V2
-        const url = `${API_BASE}/api/v2/allowpay-seller/payment-status/${transactionId}?route=${routeToUse}`;
-        
-        console.log(`📊 Consultando status: ${url}`);
-        
-        const response = await fetch(url, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ api_key: API_KEY })
-        });
-        
-        const responseData = await response.json();
-        
-        if (responseData.error) {
-            // Se erro "Pagamento não encontrado", retorna pending
-            if (responseData.error.includes('não encontrado')) {
-                return res.status(200).json({
-                    success: true,
-                    transaction_id: transactionId,
-                    status: 'pending',
-                    allowpay_status: 'pending',
-                    amount: 0,
-                    last_check: new Date().toISOString()
-                });
-            }
-            throw new Error(responseData.error);
-        }
-        
-        const allowPayStatus = responseData.status || 'unknown';
-        const source = responseData.source || 'database';
-        const amount = 0; // A API não retorna amount na consulta
-        
-        // MAPEAR STATUS para o formato que o front-end espera
-        const statusMap = {
-            'paid': 'paid',
-            'approved': 'paid',
-            'completed': 'paid',
-            'waiting_payment': 'pending',
-            'pending': 'pending',
-            'expired': 'expired',
-            'failed': 'failed',
-            'cancelled': 'canceled',
-            'canceled': 'canceled',
-            'declined': 'failed',
-            'refunded': 'refunded',
-            'chargeback': 'chargeback'
-        };
-        
-        const status = statusMap[allowPayStatus] || 'unknown';
-        
-        console.log(`📊 Status mapeado: ${allowPayStatus} → ${status} (source: ${source})`);
-        
-        return res.status(200).json({
-            success: true,
-            transaction_id: transactionId,
-            status: status,
-            allowpay_status: allowPayStatus,
-            source: source,
-            amount: amount,
-            last_check: new Date().toISOString(),
-            response_data: responseData
-        });
-        
-    } catch (error) {
-        console.error('❌ Erro na consulta:', error);
-        
-        return res.status(200).json({
-            success: true,
-            transaction_id: req.body?.transaction_id || '',
-            status: 'pending',
-            allowpay_status: 'pending',
-            amount: 0,
-            last_check: new Date().toISOString(),
-            error: error.message
-        });
+    if (!/^[a-zA-Z0-9_-]{1,50}$/.test(route)) {
+      return res.status(400).json({ success: false, error: 'Rota inválida.' });
     }
+    const url = `${API_BASE}/api/v2/allowpay-seller/payment-status/${encodeURIComponent(transactionId)}?route=${encodeURIComponent(route)}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ api_key: API_KEY })
+    });
+    const data = await response.json();
+    if (!response.ok || data.error) {
+      if (String(data.error || '').includes('não encontrado')) {
+        return res.status(200).json({ success: true, transaction_id: transactionId, status: 'pending', allowpay_status: 'pending', amount: 0, last_check: new Date().toISOString() });
+      }
+      console.error('Erro do provedor ao consultar pagamento:', response.status);
+      return res.status(502).json({ success: false, error: 'Não foi possível consultar o pagamento agora.' });
+    }
+    const originalStatus = String(data.status || 'unknown').toLowerCase();
+    const statusMap = {
+      paid: 'paid', approved: 'paid', completed: 'paid', waiting_payment: 'pending', pending: 'pending',
+      expired: 'expired', failed: 'failed', cancelled: 'canceled', canceled: 'canceled', declined: 'failed',
+      refunded: 'refunded', chargeback: 'chargeback'
+    };
+    return res.status(200).json({
+      success: true, transaction_id: transactionId,
+      status: statusMap[originalStatus] || 'unknown', allowpay_status: originalStatus,
+      source: data.source || 'database', amount: 0, last_check: new Date().toISOString()
+    });
+  } catch (error) {
+    console.error('Erro ao consultar pagamento:', error.message);
+    return res.status(502).json({ success: false, error: 'Erro ao consultar o pagamento.' });
+  }
 }
