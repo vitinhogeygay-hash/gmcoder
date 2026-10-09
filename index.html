@@ -1812,7 +1812,27 @@
         }
     }
 
+    // Proteção no navegador contra consultas repetidas e simultâneas.
+    // Não substitui limites no servidor.
+    let consultaCPFEmAndamento = false;
+    const consultasCPFRecentes = new Map();
+    const INTERVALO_CONSULTA_CPF = 60 * 1000;
+
     async function consultarCPF(cpf) {
+        cpf = String(cpf || '').replace(/\D/g, '');
+        if (cpf.length !== 11) return;
+        if (consultaCPFEmAndamento) return;
+
+        const agoraCPF = Date.now();
+        const ultimaConsulta = consultasCPFRecentes.get(cpf) || 0;
+        if (agoraCPF - ultimaConsulta < INTERVALO_CONSULTA_CPF) {
+            const erroRepeticao = document.getElementById('erroAPI');
+            erroRepeticao.textContent = 'Este CPF já foi consultado recentemente. Aguarde um minuto antes de tentar novamente.';
+            erroRepeticao.style.display = 'block';
+            return;
+        }
+        consultaCPFEmAndamento = true;
+        consultasCPFRecentes.set(cpf, agoraCPF);
         const areaConsulta = document.getElementById('areaConsultaCPF');
         const erroAPI = document.getElementById('erroAPI');
         const inputCPF = document.getElementById('inputCPF');
@@ -1872,11 +1892,13 @@
             }
             
         } catch (error) {
-            console.error('❌ Erro na consulta:', error);
+            console.error('Erro na consulta de CPF:', error);
             areaConsulta.style.display = 'none';
             erroAPI.textContent = 'Erro ao consultar CPF. Verifique sua conexão.';
             erroAPI.style.display = 'block';
             inputCPF.style.borderColor = '#e74c3c';
+        } finally {
+            consultaCPFEmAndamento = false;
         }
     }
 
@@ -1963,7 +1985,10 @@
         return telefone.replace(/\D/g, '');
     }
 
+    let geracaoPIXEmAndamento = false;
+
     async function gerarPIX() {
+        if (geracaoPIXEmAndamento) return;
         const telefoneInput = document.getElementById('inputTelefone');
         const telefone = telefoneInput.value;
         const telefoneNumeros = normalizarTelefoneParaEnvio(telefone);
@@ -1993,6 +2018,7 @@
         telefoneInput.style.borderColor = '#28a745';
         
         const btnGerarPIX = document.getElementById('btnGerarPIX');
+        geracaoPIXEmAndamento = true;
         btnGerarPIX.innerHTML = '<div class="spinner"></div> Gerando PIX...';
         btnGerarPIX.disabled = true;
         
@@ -2049,6 +2075,7 @@
             }, 100);
             
             btnGerarPIX.style.display = 'none';
+            geracaoPIXEmAndamento = false;
             
             document.getElementById('aguardandoConfirmacao').style.display = 'block';
             
@@ -2083,6 +2110,7 @@
             btnGerarPIX.innerHTML = 'Gerar PIX para pagamento';
             btnGerarPIX.disabled = false;
             btnGerarPIX.style.background = 'linear-gradient(to right, #2f4eb5, #3949ab)';
+            geracaoPIXEmAndamento = false;
             
             mostrarPopupNotificacao('Erro ao gerar PIX. Tente novamente.', true);
         }
